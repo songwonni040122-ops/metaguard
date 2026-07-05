@@ -113,6 +113,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // ---- 폴링 폴백용 상태 조회 ----
     if (action === 'state') {
+      if (!rateLimit(rlKey + ':state', 40, 60_000)) return res.status(429).json({ error: 'rate_limited' });
       return res.status(200).json({ squadId: squad.id, code: squad.code, ...(await fullState(squad.id)) });
     }
 

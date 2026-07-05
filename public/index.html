@@ -590,7 +590,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
             <sc-if value="{{ sqChatOn }}" hint-placeholder-val="{{ false }}">
             <div style="margin-top:22px;border-top:1px solid #f0f3f9;padding-top:16px">
               <div style="font-size:13px;font-weight:800;color:#0b1a40;margin-bottom:10px">분대 채팅</div>
-              <div style="display:flex;flex-direction:column;gap:8px;max-height:230px;overflow-y:auto;padding:2px">
+              <div id="sqChatList" style="display:flex;flex-direction:column;gap:8px;max-height:230px;overflow-y:auto;padding:2px">
                 <sc-for list="{{ sqMsgs }}" as="msg" hint-placeholder-count="2">
                   <div style="{{ msg.rowStyle }}"><div><div style="{{ msg.nameStyle }}">{{ msg.name }}</div><div style="{{ msg.bubStyle }}">{{ msg.text }}</div></div></div>
                 </sc-for>
@@ -1341,46 +1341,70 @@ class Component extends DCLogic {
   squadSubscribe = async (squadId) => {
     if(window.mgRealtime){
       const ok = await window.mgRealtime.subscribe(squadId, this.squadOnRT);
-      if(ok){ this.setState({ squadRT:true }); return; }
+      if(ok){
+        this.setState({ squadRT:true });
+        // 스냅샷~구독 성립 사이에 도착한 메시지 보정(누락 방지).
+        try { const d = await window.mgRealtime.load(squadId, ['messages']); if(d) this.mergeMsgs(d.messages); } catch(e){}
+        return;
+      }
     }
     this.squadPollStart(); // Realtime 불가 → 폴링 폴백
   };
 
+  // 메시지는 append-only(id 기준 union)로만 병합 → 멤버/원칙 재조회가 채팅을 덮어쓰는 경합 제거.
+  dedupMsgs = (a, b) => {
+    const map = new Map();
+    const key = (m) => m.id || (String(m.created_at) + '|' + m.text);
+    for(const m of a) map.set(key(m), m);
+    for(const m of (b||[])){ const k = key(m); if(!map.has(k)) map.set(k, m); }
+    return [...map.values()].sort((x, y) => String(x.created_at||'').localeCompare(String(y.created_at||'')));
+  };
+  mergeMsgs = (incoming) => { this.setState(s => ({ squadMsgs: this.dedupMsgs(s.squadMsgs, incoming) })); this.squadScrollChat(); };
+  // 새 메시지 도착 시 채팅 목록을 맨 아래로(렌더 후 DOM 직접 스크롤).
+  squadScrollChat = () => { setTimeout(() => { const el = document.getElementById('sqChatList'); if(el) el.scrollTop = el.scrollHeight; }, 60); };
+
   squadOnRT = (kind, row) => {
-    if(kind === 'message'){
-      if(row) this.setState(s => (s.squadMsgs.some(m => m.id && m.id===row.id) ? {} : { squadMsgs:[...s.squadMsgs, row] }));
-      return;
-    }
-    this.squadReload();
+    if(kind === 'message'){ if(row) this.mergeMsgs([row]); return; }
+    if(kind === 'members') this.squadReloadPart('members');
+    else if(kind === 'principles') this.squadReloadPart('principles');
   };
 
-  squadReload = async () => {
-    const id = this.state.squadId; if(!id) return;
+  // Realtime 모드: 바뀐 부분만 재조회(쿼리 최소화). 메시지는 여기서 절대 건드리지 않음.
+  squadReloadPart = async (part) => {
+    const id = this.state.squadId; if(!id || !window.mgRealtime) return;
     try {
-      if(window.mgRealtime && this.state.squadRT){
-        const d = await window.mgRealtime.load(id);
-        if(d) this.setState({ squadMembers:d.members, squadShared:d.principles, squadMsgs:d.messages });
-        return;
-      }
-      const d = await this.squadApi({ action:'state', code:this.state.squadCode });
-      this.setState({ squadMembers:d.members||[], squadShared:d.principles||[], squadMsgs:d.messages||[] });
+      const d = await window.mgRealtime.load(id, [part]);
+      if(!d) return;
+      if(part === 'members' && d.members) this.setState({ squadMembers:d.members });
+      if(part === 'principles' && d.principles) this.setState({ squadShared:d.principles });
     } catch(e){ /* 무시 */ }
   };
 
-  squadPollStart = () => { clearInterval(this._sqPoll); this._sqPoll = setInterval(() => this.squadReload(), 3000); };
+  // 폴링 폴백 전용 전체 재조회. 메시지는 union merge 로 안전 반영.
+  squadPoll = async () => {
+    const id = this.state.squadId; if(!id) return;
+    try {
+      const d = await this.squadApi({ action:'state', code:this.state.squadCode });
+      this.setState({ squadMembers:d.members||[], squadShared:d.principles||[] });
+      this.mergeMsgs(d.messages||[]);
+    } catch(e){ /* 무시 */ }
+  };
+  squadRefresh = () => { if(this.state.squadRT){ this.squadReloadPart('members'); this.squadReloadPart('principles'); } else { this.squadPoll(); } };
+
+  squadPollStart = () => { clearInterval(this._sqPoll); this._sqPoll = setInterval(() => this.squadPoll(), 3000); };
   squadLeave = () => { clearInterval(this._sqPoll); this._sqPoll = null; if(window.mgRealtime) window.mgRealtime.unsubscribe(); this.setState({ squadRT:false }); };
 
   squadToggle = (id, cur) => {
     if(!this.state.squadId) return;
     this.setState(s => ({ squadShared:s.squadShared.map(p => p.id===id ? { ...p, enabled:!cur } : p) }));
-    this.squadApi({ action:'toggle', code:this.state.squadCode, principleId:id, enabled:!cur }).catch(() => this.squadReload());
+    this.squadApi({ action:'toggle', code:this.state.squadCode, principleId:id, enabled:!cur }).catch(() => this.squadRefresh());
   };
 
   squadAdd = () => {
     const t = (this.state.squadNew||'').trim(); if(!t) return;
     if(!this.state.squadId){ this.addPrinciple(); return; } // 로컬 목업
     this.setState({ squadNew:'' });
-    this.squadApi({ action:'add', code:this.state.squadCode, text:t }).catch(() => this.squadReload());
+    this.squadApi({ action:'add', code:this.state.squadCode, text:t }).catch(() => this.squadRefresh());
   };
 
   squadSend = () => {
@@ -1477,6 +1501,20 @@ class Component extends DCLogic {
     return out;
   }
 
+  // AI 답변에 새어나온 마크다운 표기 제거(굵게/기울임/헤더/목록/코드/링크). 채팅은 순수 문장으로만 표시.
+  stripMd(s){
+    if(!s) return s;
+    return String(s)
+      .replace(/\*\*([^*]+)\*\*/g, '$1')          // **굵게**
+      .replace(/__([^_]+)__/g, '$1')              // __굵게__
+      .replace(/`([^`]+)`/g, '$1')                // `코드`
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')    // [텍스트](url)
+      .replace(/^\s{0,3}#{1,6}\s+/gm, '')         // # 헤더
+      .replace(/^\s*[-*+]\s+/gm, '')              // - 목록 마커
+      .replace(/[*_`]/g, '')                       // 남은 마크다운 기호(스트리밍 중 짝 안 맞는 것 포함)
+      .replace(/[ \t]{2,}/g, ' ');
+  }
+
   dataQa(){
     const av = 'width:28px;height:28px;border-radius:9px;background:#0b1a40;display:grid;place-items:center;flex-shrink:0;margin-right:8px';
     const rowAi = 'display:flex;align-items:flex-end;align-self:flex-start;max-width:88%';
@@ -1485,7 +1523,7 @@ class Component extends DCLogic {
     const bubMe = 'background:#173072;color:#fff;font-size:14px;line-height:1.6;padding:11px 14px;border-radius:16px 4px 16px 16px;white-space:pre-wrap';
     const msgs = this.state.qaMsgs.map(m => {
       const ai = m.role === 'ai';
-      return { text:m.text, ai, rowStyle: ai ? rowAi : rowMe, avatarStyle: ai ? av : 'display:none', bubbleStyle: ai ? bubAi : bubMe };
+      return { text: ai ? this.stripMd(m.text) : m.text, ai, rowStyle: ai ? rowAi : rowMe, avatarStyle: ai ? av : 'display:none', bubbleStyle: ai ? bubAi : bubMe };
     });
     return {
       qaMsgs: msgs,
@@ -1711,15 +1749,18 @@ window.mgRealtime = {
       setTimeout(() => done(false), 6000); // 미확정 시 폴백
     });
   },
-  async load(squadId){
+  // parts 로 필요한 테이블만 조회(기본 전체). 멤버/원칙 이벤트 시 1개만 재조회해 쿼리 최소화.
+  async load(squadId, parts){
     const sb = await this.init();
     if(!sb) return null;
-    const [m, p, msg] = await Promise.all([
-      sb.from('squad_members').select('session_id,name,joined_at').eq('squad_id', squadId).order('joined_at'),
-      sb.from('squad_principles').select('id,text,source,enabled,sort_idx').eq('squad_id', squadId).order('sort_idx'),
-      sb.from('squad_messages').select('id,session_id,name,text,created_at').eq('squad_id', squadId).order('created_at').limit(200)
-    ]);
-    return { members: m.data || [], principles: p.data || [], messages: msg.data || [] };
+    parts = parts || ['members', 'principles', 'messages'];
+    const out = {};
+    const jobs = [];
+    if(parts.includes('members')) jobs.push(sb.from('squad_members').select('session_id,name,joined_at').eq('squad_id', squadId).order('joined_at').then(r => { out.members = r.data || []; }));
+    if(parts.includes('principles')) jobs.push(sb.from('squad_principles').select('id,text,source,enabled,sort_idx').eq('squad_id', squadId).order('sort_idx').then(r => { out.principles = r.data || []; }));
+    if(parts.includes('messages')) jobs.push(sb.from('squad_messages').select('id,session_id,name,text,created_at').eq('squad_id', squadId).order('created_at').limit(200).then(r => { out.messages = r.data || []; }));
+    await Promise.all(jobs);
+    return out;
   },
   unsubscribe(){ if(this._ch && this._sb){ try { this._sb.removeChannel(this._ch); } catch(e){} this._ch = null; } }
 };

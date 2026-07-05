@@ -255,7 +255,9 @@ Response
 
 - 코드 알파벳: 혼동문자(I,O,0,1,L) 제외. rateLimit·이름 24자·원칙 200자·채팅 300자 제한. DB 미설정 시 `503 db_disabled` → 프론트가 **오프라인 로컬 목업**(혼자 작성)으로 폴백.
 
-**클라 Realtime**: `<script type="module">`이 CDN(`esm.sh/@supabase/supabase-js@2`)으로 client 생성, `window.mgRealtime.{subscribe,load,unsubscribe}` 노출. **npm 빌드 도입 안 함**(M3 제약 준수). 구독 실패 시 false 반환 → 폴링.
+**클라 Realtime**: `<script type="module">`이 CDN(`esm.sh/@supabase/supabase-js@2`)으로 client 생성, `window.mgRealtime.{subscribe,load(squadId,parts),unsubscribe}` 노출. **npm 빌드 도입 안 함**(M3 제약 준수). 구독 실패 시 false 반환 → 폴링.
+
+**동기화 규칙(경합 방지)**: 채팅 메시지는 **append-only(id 기준 union merge)**로만 갱신한다. 멤버/원칙 변경 이벤트는 해당 부분만 재조회(`load(id,['members'|'principles'])`)하고 **메시지는 절대 덮어쓰지 않는다**. (초기엔 멤버-조인 이벤트의 stale 스냅샷 재조회가 직후 도착한 채팅을 클로버링하는 버그가 있었음 → 이 규칙으로 수정.) 구독 성립 직후 `messages`만 1회 재조회해 스냅샷~구독 사이 gap 보정. 채팅 목록은 새 메시지 도착 시 자동 하단 스크롤.
 
 ### 5.5 `GET /api/config`
 클라 Realtime용 공개 설정 `{ supabaseUrl, supabaseAnonKey }` 반환. anon 키는 공개 설계(RLS 보호). env `SUPABASE_ANON_KEY` 우선, 없으면 프로젝트 anon JWT 폴백.
@@ -282,7 +284,7 @@ Response
 [참고 맥락 — 발화에 직접 노출 금지]
 - 현재 추정 약점 축: {weakAxes}  (info=검증, emo=감정, act=임무우선, resp=대응)
 ```
-temperature ≈ 0.6.
+temperature ≈ 0.6. **마크다운 금지**(`**굵게**`·`#제목`·`- 목록` 등) — 순수 대화체만. 프론트도 방어적으로 `stripMd()`로 AI 답변의 마크다운 기호를 제거해 표시(스트리밍 중 짝 안 맞는 `**` 포함).
 
 ### 6.1.1 오프닝 시스템 프롬프트 (`openingSystemPrompt`)
 진단 완료 직후 첫 질문 생성 전용. 사용자 메시지 없이 `picks`(사용자가 실제로 고른 대응 목록)만 받아,
