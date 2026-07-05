@@ -3,7 +3,9 @@
   "functions": {
     "api/chat.ts": { "maxDuration": 30 },
     "api/report.ts": { "maxDuration": 30 },
-    "api/session.ts": { "maxDuration": 10 }
+    "api/session.ts": { "maxDuration": 10 },
+    "api/squad.ts": { "maxDuration": 10 },
+    "api/config.ts": { "maxDuration": 5 }
   },
   "headers": [
     {

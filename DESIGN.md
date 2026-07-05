@@ -12,7 +12,7 @@
 | AI 프록시 컴퓨팅 | **Vercel Serverless Functions (`/api/*`)** — 프론트와 동일 도메인(무CORS) |
 | 데이터 저장 | **Supabase Postgres** (Vercel 함수에서 service_role로 접근) |
 | 대화 로그 | **저장함** (개인정보 고지 + 익명 전제, 10장 참고) |
-| OpenAI 모델 | **gpt-5.5-nano** (챗봇·리포트 공통 시작) — 정확한 모델 id 문자열은 배포 직전 OpenAI 콘솔에서 확인 |
+| OpenAI 모델 | **gpt-5.4-nano** (챗봇·리포트 공통) — `OPENAI_REASONING_EFFORT=none`. `gpt-5.5-nano`는 실존하지 않아 교체됨 |
 | 사용자 인증 | **완전 익명** (로그인 없음, 익명 세션 id만) |
 | 도메인 | Vercel 제공 도메인 |
 
@@ -58,7 +58,7 @@
        ▼                       ▼
 ┌──────────────┐      ┌──────────────────┐
 │ OpenAI API   │      │ Supabase Postgres │
-│ gpt-5.5-nano │      │ sessions/diagnoses│
+│ gpt-5.4-nano │      │ sessions/diagnoses│
 └──────────────┘      │ /messages/reports │
                       └──────────────────┘
 ```
@@ -83,7 +83,7 @@ metaguard/
 │  ├─ chat.ts                    # POST: 챗봇 스트리밍
 │  ├─ report.ts                  # POST: 리포트 해설
 │  └─ _lib/
-│     ├─ openai.ts               # OpenAI 호출 래퍼 (gpt-5.5-nano)
+│     ├─ openai.ts               # OpenAI 호출 래퍼 (gpt-5.4-nano)
 │     ├─ supabase.ts             # service_role 클라이언트
 │     ├─ scoring.ts              # 프론트 score() 이식 → 서버 재계산/검증
 │     ├─ prompts.ts              # 시스템 프롬프트 (6장)
@@ -165,7 +165,22 @@ Response: `{ "sessionId": "uuid" }`
 → 프론트는 최초 진입 시 1회 호출, `localStorage`에 저장.
 
 ### 5.2 `POST /api/chat` — QA 챗봇 (스트리밍)
-Request
+두 가지 모드가 있다.
+
+**(a) 오프닝 모드 `opening:true`** — 진단 완료 직후 첫 질문 생성. 사용자 메시지 없이, 사용자가 실제로 고른 대응(`picks`)을 근거로 AI가 개인화된 첫 질문 1개를 만든다. (기존 정적 `QA_INTROS` 대체)
+```json
+{
+  "sessionId": "uuid",
+  "answers": [{"choice":"A"},{"choice":"C"},{"choice":"D"}],
+  "opening": true,
+  "picks": [{"topic":"동기 김상병 · 1:1 채팅","chose":"일단 넘기고 무시한다"}]
+}
+```
+- `picks`는 서버에서 정규화(최대 12개, topic 80자·chose 120자 제한). 신뢰하지 않음.
+- 프롬프트: `openingSystemPrompt(weakAxes, picks)` (6.1). assistant 응답만 `chat_messages`에 `turn 0`으로 저장.
+- 실패/오프라인 시 프론트가 규칙기반 정적 인트로(`qaPlan().intro`)로 폴백.
+
+**(b) 대화 모드(기본)** — 사용자 답변에 대한 후속 질문.
 ```json
 {
   "sessionId": "uuid",
@@ -176,11 +191,11 @@ Request
 }
 ```
 서버 처리
-1. rate limit 확인 → 초과 시 429
+1. rate limit 확인 → 초과 시 429 (opening 포함 분당 10회)
 2. `scoring.ts`로 answers 재계산 → `weakAxes`
-3. 시스템 프롬프트(6.1) + history + 새 메시지로 **gpt-5.5-nano 스트리밍** 호출
+3. 모드별 시스템 프롬프트(6.1) + (대화 모드는 history + 새 메시지)로 **gpt-5.4-nano 스트리밍** 호출
 4. SSE(text/event-stream)로 프론트에 델타 전달
-5. user·assistant 메시지를 `chat_messages`에 저장(저장 결정)
+5. 메시지를 `chat_messages`에 저장(저장 결정) — 반드시 `res.end()` 전에 await
 
 Response `text/event-stream`
 ```
@@ -188,7 +203,7 @@ data: {"delta":"그 "}
 data: {"delta":"불안 "}
 data: {"done":true}
 ```
-- 대화는 **최대 2~3턴**(현재 UX 유지). 마지막 턴이면 마무리 멘트 + `done`.
+- 대화 턴 수 하드 캡 없음. 질문 한도(`MAX_QUESTIONS=5`) 도달 시 프롬프트가 자연스럽게 마무리 유도.
 
 ### 5.3 `POST /api/report` — 리포트 해설 (JSON)
 Request: `{ "sessionId":"uuid", "answers":[...], "phase":"diag" }`
@@ -196,7 +211,7 @@ Request: `{ "sessionId":"uuid", "answers":[...], "phase":"diag" }`
 1. rate limit
 2. `scoring.ts` 재계산 → `typeCode/scores/weakAxes` (클라 값 무시)
 3. `diagnoses` 저장
-4. gpt-5.5-nano **Structured Outputs(json_schema)** 로 형식 강제 호출
+4. gpt-5.4-nano **Structured Outputs(json_schema)** 로 형식 강제 호출
 5. `reports` 저장 후 반환
 
 Response
@@ -217,6 +232,33 @@ Response
 }
 ```
 > `typeCode/typeName/scores`는 계산값 그대로, `narrative`만 AI 생성.
+
+### 5.4 분대 원칙 — 참여코드 공유 + 실시간 채팅
+개인 훈련의 마지막 단계인 "분대 원칙"을 **여러 명이 한 방에서 함께 정하고 실시간으로 토의**하는 기능.
+
+**보안 모델(하이브리드)**: 쓰기는 서버(service_role), 읽기·실시간은 클라(anon).
+- **쓰기**(방 생성/참여/토글/원칙추가/채팅)는 전부 `POST /api/squad`(service_role) 경유 → 검증·rateLimit·길이제한
+- **읽기·실시간 수신**은 클라가 anon 키로 **Supabase Realtime** 구독(squad 테이블만 RLS `SELECT using(true)`, `squad_id` 필터). Realtime 불가 시 `state` 액션 3초 폴링 폴백
+- 민감 테이블(sessions/diagnoses/chat_messages/reports)은 계속 **RLS 전면 차단**
+
+**DB**(`0002_squads.sql`): `squads`(code 6자 unique) / `squad_members`(unique squad+session) / `squad_principles`(source preset|custom, enabled 공유토글, sort_idx) / `squad_messages`. 4개 모두 `supabase_realtime` publication 등록.
+
+**`POST /api/squad`** — `action` 디스패치:
+| action | 입력 | 처리 |
+|---|---|---|
+| `create` | name | 코드 생성(충돌 재시도)+프리셋4 시드+생성자 멤버 → `{squadId,code,members,principles,messages}` |
+| `join` | code,name | 코드 조회(404 가능)+멤버 upsert → 상태 반환 |
+| `toggle` | code,principleId,enabled | 공유 토글 update |
+| `add` | code,text | 커스텀 원칙 insert(sort_idx=max+1) |
+| `send` | code,name,text | 채팅 insert(→ Realtime 송출) |
+| `state` | code | 폴링 폴백용 members/principles/messages |
+
+- 코드 알파벳: 혼동문자(I,O,0,1,L) 제외. rateLimit·이름 24자·원칙 200자·채팅 300자 제한. DB 미설정 시 `503 db_disabled` → 프론트가 **오프라인 로컬 목업**(혼자 작성)으로 폴백.
+
+**클라 Realtime**: `<script type="module">`이 CDN(`esm.sh/@supabase/supabase-js@2`)으로 client 생성, `window.mgRealtime.{subscribe,load,unsubscribe}` 노출. **npm 빌드 도입 안 함**(M3 제약 준수). 구독 실패 시 false 반환 → 폴링.
+
+### 5.5 `GET /api/config`
+클라 Realtime용 공개 설정 `{ supabaseUrl, supabaseAnonKey }` 반환. anon 키는 공개 설계(RLS 보호). env `SUPABASE_ANON_KEY` 우선, 없으면 프로젝트 anon JWT 폴백.
 
 ---
 
@@ -241,6 +283,20 @@ Response
 - 현재 추정 약점 축: {weakAxes}  (info=검증, emo=감정, act=임무우선, resp=대응)
 ```
 temperature ≈ 0.6.
+
+### 6.1.1 오프닝 시스템 프롬프트 (`openingSystemPrompt`)
+진단 완료 직후 첫 질문 생성 전용. 사용자 메시지 없이 `picks`(사용자가 실제로 고른 대응 목록)만 받아,
+그 선택 "패턴"에서 읽히는 경향을 1~2문장으로 짚은 뒤 개인화된 열린 질문 1개를 만든다.
+```
+[지금 할 일 — 상담의 첫 질문 1개 생성]
+- 사용자가 고른 대응 중 가장 특징적인 1~2개를 자연스럽게 언급하며 개인화한다.
+- 질문은 반드시 1개. 유형명·점수·영어 축코드는 언급 금지.
+
+[사용자의 실제 선택]
+  1. [동기 김상병 · 1:1 채팅] → "일단 넘기고 무시한다"
+  ...
+```
+- `picks` 없음/실패 시 프론트가 정적 인트로로 폴백.
 
 ### 6.2 리포트 시스템 프롬프트 (Structured Outputs)
 ```
@@ -383,6 +439,7 @@ vercel deploy --prod       # public/ 정적 + api/ 함수 동시 배포
   `DCLogic`, `<sc-if>`/`{{ }}`)으로 만들어졌고, 표준 빌드 도구로 옮기려면 UI를 손으로 재작성해야 해
   **디자인이 틀어질 위험**이 있다. 디자인 툴 산출물은 그대로 두고 그 위에 AI 배관만 얹는다.
 - **M4 (선택)**: "의심 메시지 붙여넣기 → AI 조작징후 분석" 기능, 다국어.
+- **분대 원칙 공유(구현됨)**: 참여코드로 여러 명이 한 방에서 대응원칙을 함께 정하고 실시간 채팅(Supabase Realtime). 5.4 참조. (향후: 채팅 모더레이션/신고, 방 만료·보존정책)
 
 ---
 
@@ -393,7 +450,9 @@ vercel deploy --prod       # public/ 정적 + api/ 함수 동시 배포
 - [x] `api/_lib/` (scoring/openai/supabase/prompts/ratelimit)
 - [x] `api/session.ts` `api/chat.ts` `api/report.ts`
 - [x] 프론트 3곳 교체(ensureSession/qaSend/loadReport) + 폴백
-- [ ] Vercel 환경변수 + 배포 + 모바일 확인 _(사용자 키 필요)_
+- [x] AI 오프닝 질문(`opening` 모드) — 진단 선택 기반 첫 질문 AI 생성
+- [x] 분대 원칙 공유 + 실시간 채팅 (`0002_squads.sql`, `api/squad.ts`, `api/config.ts`, Realtime)
+- [ ] 배포 시 Vercel 환경변수에 `SUPABASE_ANON_KEY` 추가(없으면 config.ts 폴백값 사용)
 
 > 검증 완료: `tsc --noEmit` 통과 · esbuild 3개 핸들러 번들 성공 · scoring 이식 런타임 대조(ACD→ARPC,
 > allA→VSMC) · DCLogic 클래스 `node --check` 통과. 남은 것은 키 등록 + 배포뿐.
