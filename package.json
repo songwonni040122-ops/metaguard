@@ -1,0 +1,14 @@
+{
+  "name": "metaguard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MetaGuard — 인지전 대응 심리방어 훈련 PWA (Vercel + OpenAI + Supabase)",
+  "engines": {
+    "node": "22.x"
+  },
+  "devDependencies": {
+    "@vercel/node": "^3.2.24",
+    "typescript": "^5.6.3"
+  }
+}
