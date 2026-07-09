@@ -5,7 +5,7 @@ import { chatStream, ChatMessage } from './_lib/openai.js';
 import { dbEnabled, insert } from './_lib/supabase.js';
 import { rateLimit, clientIp } from './_lib/ratelimit.js';
 
-const MAX_QUESTIONS = 6; // 아쉬운 선택 2~3개 × 1~2턴 → 6개까지 질문, 이후 프롬프트가 자연스럽게 마무리
+const MAX_QUESTIONS = 5; // 오프닝 1개 + 후속 질문 = 총 5개까지, 5번째에서 프롬프트가 자연스럽게 마무리(강제 차단 아님)
 const MAX_MESSAGE_LEN = 500;
 const MAX_HISTORY = 12;
 
