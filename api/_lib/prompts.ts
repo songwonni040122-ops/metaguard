@@ -5,10 +5,17 @@ const AXIS_HINT = 'info=검증, emo=감정, act=임무우선, resp=대응';
 const AXIS_LABEL: Record<AxisKey, string> = { info: '검증', emo: '감정', act: '임무우선', resp: '대응' };
 
 // 사용자가 점수를 낮춘 '아쉬운 선택' 목록을 프롬프트용 블록으로.
+// 시나리오 전체 맥락(상대 메시지·가짜 콘텐츠·반응 글)까지 담아 AI가 구체적으로 질문하게 한다.
 function badPicksBlock(badPicks: BadPick[]): string {
   if (!badPicks.length) return '  (점수를 크게 낮춘 뚜렷한 선택은 없음 — 전반적으로 무난한 편)';
   return badPicks
-    .map((p, i) => `  ${i + 1}. [${p.topic}] 상황에서 "${p.chose}" 선택 (약해진 영역: ${p.hurt.map((k) => AXIS_LABEL[k]).join('·')})`)
+    .map((p, i) => {
+      const lines = [`  ${i + 1}. [${p.topic}]`];
+      if (p.situation) lines.push(`     상황 내용: ${p.situation}`);
+      lines.push(`     사용자의 선택: "${p.chose}"${p.better ? ` (더 나은 선택이었던 것: "${p.better}")` : ''}`);
+      lines.push(`     약해진 영역: ${p.hurt.map((k) => AXIS_LABEL[k]).join('·')}`);
+      return lines.join('\n');
+    })
     .join('\n');
 }
 
@@ -36,6 +43,7 @@ export function chatSystemPrompt(weakAxes: AxisKey[], badPicks: BadPick[], maxQu
     '- 한 응답에 질문은 1개, 한 선택만 다룬다. 이미 물어본 선택은 절대 다시 묻지 않는다(대화 기록 참고).',
     '',
     '[반드시]',
+    '- 질문에는 위 "상황 내용"에 나온 실제 메시지·가짜 콘텐츠 문구를 구체적으로 짚으며 물어라(짧은 라벨만 말하지 말 것).',
     '- 유형명·점수를 절대 언급하지 않는다(리포트에서 공개).',
     '- 의학적·정치적 단정, 특정 진영 옹호 금지. 방법(검증·냉정·신고)에 집중.',
     '- 한국어. 이모지 최소.',
@@ -72,6 +80,7 @@ export function openingSystemPrompt(weakAxes: AxisKey[], badPicks: BadPick[]): s
     badPicksBlock(badPicks),
     '',
     '[반드시]',
+    '- 질문에는 위 "상황 내용"에 나온 실제 메시지·가짜 콘텐츠 문구를 구체적으로 짚으며 물어라(짧은 라벨만 말하지 말 것). 예: "동기가 보낸 \'가혹행위 영상 유출\' 글, 그때 진짜인지 의심은 안 드셨어요?"',
     '- 질문은 정확히 1개. 유형명·점수·영어 축코드(info/emo/act/resp)를 절대 언급하지 않는다.',
     '- 의학적·정치적 단정, 특정 진영 옹호 금지. 방법(검증·냉정·신고)에 집중.',
     '- 한국어. 이모지 최소.',

@@ -1164,7 +1164,16 @@ class Component extends DCLogic {
       const s = list[i]; if(!s) return null;
       const opt = (s.options || [])['ABCD'.indexOf(a.choice)];
       if(!opt) return null;
-      return { topic: s.context, chose: opt, choice: a.choice };
+      // 시나리오 전체 맥락(상대 메시지 + 가짜 콘텐츠 본문 + 반응 글)을 합쳐 AI에 전달 → 구체적 질문 유도.
+      const lead = s.lead || {}, card = s.card || {}, post = s.post || {};
+      const content = String(card.text || card.title || card.caption || card.bigSub || card.big || '').slice(0, 120);
+      const parts = [];
+      if(lead.text) parts.push('상대(' + (lead.name || '?') + '): "' + String(lead.text).slice(0, 120) + '"');
+      if(content) parts.push('콘텐츠: "' + content + '"');
+      if(post.text) parts.push('반응 글: "' + String(post.text).slice(0, 120) + '"');
+      const situation = parts.join(' / ');
+      const better = (s.options || [])[0] || ''; // A안 = 검증/신고 = 더 나은 선택
+      return { topic: s.context, situation, chose: opt, better, choice: a.choice };
     }).filter(Boolean).slice(0, 12);
   }
 
