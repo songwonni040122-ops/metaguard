@@ -1238,10 +1238,11 @@ class Component extends DCLogic {
       .replace(/[ \t]{2,}/g, ' ');
   }
 
+  // QA·분대 채팅 말풍선 '행' 컨테이너 스타일(양쪽 동일) — 중복 제거.
+  CHAT_ROW = { ai: 'display:flex;align-items:flex-end;align-self:flex-start;max-width:88%', me: 'display:flex;align-items:flex-end;align-self:flex-end;max-width:88%' };
   dataQa(){
     const av = 'width:28px;height:28px;border-radius:9px;background:#0b1a40;display:grid;place-items:center;flex-shrink:0;margin-right:8px';
-    const rowAi = 'display:flex;align-items:flex-end;align-self:flex-start;max-width:88%';
-    const rowMe = 'display:flex;align-items:flex-end;align-self:flex-end;max-width:88%';
+    const rowAi = this.CHAT_ROW.ai, rowMe = this.CHAT_ROW.me;
     const bubAi = 'background:#eef1f7;color:#14223f;font-size:14px;line-height:1.6;padding:11px 14px;border-radius:4px 16px 16px 16px;white-space:pre-wrap';
     const bubMe = 'background:#173072;color:#fff;font-size:14px;line-height:1.6;padding:11px 14px;border-radius:16px 4px 16px 16px;white-space:pre-wrap';
     const msgs = this.state.qaMsgs.map(m => {
@@ -1486,8 +1487,7 @@ class Component extends DCLogic {
     }
 
     out.sqChatOn = shared;
-    const rowAi = 'display:flex;align-items:flex-end;align-self:flex-start;max-width:88%';
-    const rowMe = 'display:flex;align-items:flex-end;align-self:flex-end;max-width:88%';
+    const rowAi = this.CHAT_ROW.ai, rowMe = this.CHAT_ROW.me;
     const bubOther = 'background:#eef1f7;color:#14223f;font-size:13.5px;line-height:1.5;padding:9px 12px;border-radius:4px 14px 14px 14px;white-space:pre-wrap';
     const bubMe = 'background:#173072;color:#fff;font-size:13.5px;line-height:1.5;padding:9px 12px;border-radius:14px 4px 14px 14px;white-space:pre-wrap';
     out.sqMsgs = (s.squadMsgs||[]).map(m => { const mine = m.session_id===me;
