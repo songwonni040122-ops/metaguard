@@ -331,6 +331,13 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
               <div style="font-size:13.5px;line-height:1.6;color:rgba(255,255,255,.86);margin-top:12px">{{ rpTrait }}</div>
             </div>
 
+            <sc-if value="{{ rpRefined }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;gap:9px;align-items:flex-start;background:#eef4ff;border:1px solid #d3e0fb;border-radius:13px;padding:11px 13px;margin-top:12px">
+                <span style="font-size:14px;flex-shrink:0;line-height:1.5">🛡️</span>
+                <span style="font-size:12.5px;color:#243b66;line-height:1.6;font-weight:600">{{ rpRefineNote }}</span>
+              </div>
+            </sc-if>
+
             <div style="font-size:14px;font-weight:800;color:#0b1a40;margin:24px 0 14px">4개 기준 분석</div>
 
             <div style="margin-bottom:16px">
@@ -636,7 +643,7 @@ class Component extends DCLogic {
     trainingCourse: 'emo', trainingIdx: 0, tChosen: null,
     rediagAnswers: [],
     principlesOn: [true, true, false, false], extraPrinciples: [], newPrinciple: '',
-    sessionId: null, aiReport: null, aiTypeCode: null,
+    sessionId: null, aiReport: null, aiTypeCode: null, aiScores: null, aiAdjust: null, aiBaseCode: null, aiRefined: false,
     // 분대(참여코드 공유 + 실시간 채팅)
     squadStage: 'gate', squadName: '', squadJoinCode: '', squadErr: '', squadBusy: false,
     squadId: null, squadCode: '', squadMembers: [], squadShared: null, squadMsgs: [], squadChat: '', squadNew: '', squadRT: false
@@ -1022,6 +1029,18 @@ class Component extends DCLogic {
     return { code, scores, weak };
   }
   typeInfo(code){ return this.TYPES[code] || { name:'복합 대응형', trait:'여러 성향이 혼재된 유형이에요.', tag:'' }; }
+  // 리포트용 점수: 서버가 AI 상담으로 보정한 최종 점수/유형이 있으면 그걸, 없으면(오프라인) 로컬 계산.
+  reportScore(){
+    const local = this.score(this.seedAnswers());
+    const sc = this.state.aiScores;
+    if(sc && ['info','emo','act','resp'].every(k => typeof sc[k] === 'number')){
+      const scores = { info:sc.info, emo:sc.emo, act:sc.act, resp:sc.resp };
+      const code = this.state.aiTypeCode || local.code;
+      const weak = this.AXES.filter(a => scores[a.key] < 50);
+      return { code, scores, weak };
+    }
+    return local;
+  }
   avg(s){ return Math.round((s.info + s.emo + s.act + s.resp)/4); }
   weaknessText(weak){
     if(!weak.length) return '네 영역 모두 안정적인 정신전력을 보이고 있어요. 현재의 판단 기준을 유지하면서, 더 정교해지는 기만 정보에 대비하는 심화 훈련을 권장합니다.';
@@ -1111,7 +1130,7 @@ class Component extends DCLogic {
       const s = list[i]; if(!s) return null;
       const opt = (s.options || [])['ABCD'.indexOf(a.choice)];
       if(!opt) return null;
-      return { topic: s.context, chose: opt };
+      return { topic: s.context, chose: opt, choice: a.choice };
     }).filter(Boolean).slice(0, 12);
   }
 
@@ -1182,7 +1201,7 @@ class Component extends DCLogic {
   qaStream = async (t, turn, history) => {
     const res = await fetch(this.API + '/chat', { method:'POST',
       headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ sessionId:this.state.sessionId, answers:this.seedAnswers(), turn, history, message:t }) });
+      body: JSON.stringify({ sessionId:this.state.sessionId, answers:this.seedAnswers(), turn, history, message:t, picks:this.qaPicks(this.seedAnswers()) }) });
     if(!res.ok || !res.body) throw new Error('chat ' + res.status);
     this.setState(s => ({ qaMsgs:[...s.qaMsgs, { role:'ai', text:'' }], qaTyping:false }));
     const got = await this.qaReadStream(res);
@@ -1215,8 +1234,11 @@ class Component extends DCLogic {
 
   // 리포트: 실제 /api/report 대기 → 성공 시 AI 해설, 실패 시에도 '구조화' 폴백 해설을 생성(단일 문단 아님).
   loadReport = async () => {
-    this.setState({ view:'analyzing', aiReport:null, aiTypeCode:null });
-    const body = JSON.stringify({ sessionId:this.state.sessionId, answers:this.seedAnswers(), phase:this.state.phase || 'diag' });
+    this.setState({ view:'analyzing', aiReport:null, aiTypeCode:null, aiScores:null, aiAdjust:null, aiBaseCode:null, aiRefined:false });
+    const answers = this.seedAnswers();
+    // 상담 대화(qaMsgs)를 서버에 넘겨 점수 보정 근거로 사용.
+    const transcript = (this.state.qaMsgs || []).map(m => ({ role:m.role, text:m.text })).filter(m => m.text);
+    const body = JSON.stringify({ sessionId:this.state.sessionId, answers, phase:this.state.phase || 'diag', transcript, picks:this.qaPicks(answers) });
     let ok = false;
     if(this.state.sessionId){
       for(let attempt = 0; attempt < 2 && !ok; attempt++){
@@ -1225,7 +1247,8 @@ class Component extends DCLogic {
           if(r.ok){
             const data = await r.json();
             if(data && data.narrative){
-              this.setState({ view:'report', aiReport:data.narrative, aiTypeCode:data.typeCode || null });
+              this.setState({ view:'report', aiReport:data.narrative, aiTypeCode:data.typeCode || null,
+                aiScores:data.scores || null, aiAdjust:data.adjustments || null, aiBaseCode:data.baseTypeCode || null, aiRefined:!!data.refined });
               ok = true;
             }
           } else if(r.status < 500 && r.status !== 429){
@@ -1438,7 +1461,7 @@ class Component extends DCLogic {
     if(v === 'finish'){ this.setState({ view:'squad' }); return; }
   };
 
-  restart = () => { this.squadLeave(); this.setState({ view:'splash', onStep:0, phase:'diag', completedCourses:[], scenarioIdx:0, answers:[], qaReplies:[], trainingCourse:'emo', trainingIdx:0, tChosen:null, rediagAnswers:[], principlesOn:[true,true,false,false], extraPrinciples:[], newPrinciple:'', aiReport:null, aiTypeCode:null, squadStage:'gate', squadId:null, squadCode:'', squadMembers:[], squadShared:null, squadMsgs:[], squadJoinCode:'', squadErr:'' }); };
+  restart = () => { this.squadLeave(); this.setState({ view:'splash', onStep:0, phase:'diag', completedCourses:[], scenarioIdx:0, answers:[], qaReplies:[], trainingCourse:'emo', trainingIdx:0, tChosen:null, rediagAnswers:[], principlesOn:[true,true,false,false], extraPrinciples:[], newPrinciple:'', aiReport:null, aiTypeCode:null, aiScores:null, aiAdjust:null, aiBaseCode:null, aiRefined:false, squadStage:'gate', squadId:null, squadCode:'', squadMembers:[], squadShared:null, squadMsgs:[], squadJoinCode:'', squadErr:'' }); };
 
   jumpTo(sv){
     const map = { '온보딩':'onboard', '진단':'scenario', 'AI 분석':'qa', '리포트':'report', '트레이닝':'training', '코스 목록':'courses', '성장 확인':'growth', '분대 원칙':'squad' };
@@ -1554,12 +1577,20 @@ class Component extends DCLogic {
   }
 
   dataReport(){
-    const s = this.score(this.seedAnswers());
+    const s = this.reportScore();
     const ti = this.typeInfo(s.code);
     const ai = this.state.aiReport;
     const arr = (x) => Array.isArray(x) ? x : [];
     const hasAi = !!(ai && (ai.summary || arr(ai.strengths).length || arr(ai.weaknesses).length || arr(ai.coaching).length));
     const out = { rpCode:s.code, rpName:ti.name, rpTrait:ti.trait, rpTag:ti.tag, rpHasTag:!!ti.tag };
+    // AI 상담 보정 배너: 유형이 바뀌었거나 점수가 조정된 경우 안내.
+    const baseCode = this.state.aiBaseCode, adj = this.state.aiAdjust || {};
+    const anyAdj = ['info','emo','act','resp'].some(k => (adj[k]||0) !== 0);
+    const typeChanged = !!(this.state.aiRefined && baseCode && baseCode !== s.code);
+    out.rpRefined = !!(this.state.aiRefined && (typeChanged || anyAdj));
+    out.rpRefineNote = typeChanged
+      ? ('AI 상담 답변을 반영해 1차 진단 ' + baseCode + ' → ' + s.code + ' 로 유형이 조정됐어요.')
+      : (out.rpRefined ? 'AI 상담 답변을 반영해 축별 점수가 미세 조정됐어요.' : '');
     // AI 구조화 해설 (요약/강점/보완/실천팁) — 가독성 위해 섹션 분리
     out.aiOn = hasAi;
     out.aiOff = !hasAi;

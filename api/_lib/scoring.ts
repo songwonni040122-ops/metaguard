@@ -87,6 +87,57 @@ export function weakAxesText(weakAxes: AxisKey[]): string {
   return weakAxes.map((k) => AXIS_BLURB[k]).join(', ');
 }
 
+// ── AI 상담 기반 점수 보정 ─────────────────────────────────────
+export type Adjustments = Record<AxisKey, number>;
+
+// 한 선택(A~D)이 '약점'으로 기여하는 축 목록 → '안좋은(점수 깎는) 답변' 판별.
+export function pickWeakAxes(choice: Choice): AxisKey[] {
+  const ax = choiceAxes[choice];
+  if (!ax) return [];
+  return AXES.filter((axis) => ax[axis.key] === axis.weak.code).map((a) => a.key as AxisKey);
+}
+
+// 진단에서 사용자가 고른 '아쉬운 선택'을 약점 기여가 큰 순으로 상위 N개.
+// 클라이언트 입력(untrusted)을 길이·개수 제한하며 정규화한다.
+export interface BadPick { topic: string; chose: string; hurt: AxisKey[]; }
+export function rankBadPicks(input: unknown, limit = 3): BadPick[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .slice(0, 12)
+    .map((p: any): BadPick | null => {
+      const c = p?.choice;
+      const choice = c === 'A' || c === 'B' || c === 'C' || c === 'D' ? (c as Choice) : null;
+      const topic = typeof p?.topic === 'string' ? p.topic.slice(0, 80) : '';
+      const chose = typeof p?.chose === 'string' ? p.chose.slice(0, 120) : '';
+      if (!choice || !chose) return null;
+      return { topic, chose, hurt: pickWeakAxes(choice) };
+    })
+    .filter((p): p is BadPick => !!p && p.hurt.length > 0)
+    .sort((a, b) => b.hurt.length - a.hurt.length)
+    .slice(0, limit);
+}
+
+// scores(0~100)만으로 유형코드 재계산: 축별 50 이상이면 강, 미만이면 약.
+export function codeFromScores(scores: Record<AxisKey, number>): string {
+  let code = '';
+  AXES.forEach((a) => { code += scores[a.key] >= 50 ? a.strong.code : a.weak.code; });
+  return code;
+}
+
+// 상담 보정치를 base 점수에 반영 → 최종 ScoreResult(유형까지 재계산).
+// 축별 보정은 ±cap 로 제한(신빙성 보정이지 결과 조작 아님).
+export function applyAdjustments(base: ScoreResult, adj: Partial<Adjustments> | undefined, cap = 20): ScoreResult {
+  const scores = {} as Record<AxisKey, number>;
+  (['info', 'emo', 'act', 'resp'] as AxisKey[]).forEach((k) => {
+    const raw = Number(adj?.[k]);
+    const d = Number.isFinite(raw) ? Math.max(-cap, Math.min(cap, Math.round(raw))) : 0;
+    scores[k] = Math.max(0, Math.min(100, base.scores[k] + d));
+  });
+  const code = codeFromScores(scores);
+  const weakAxes = AXES.filter((a) => scores[a.key] < 50).map((a) => a.key as AxisKey);
+  return { code, scores, weakAxes };
+}
+
 // 클라이언트 입력을 신뢰하지 않고 검증/정규화한다.
 export function validateAnswers(input: unknown): Answer[] {
   if (!Array.isArray(input)) throw new Error('answers must be an array');

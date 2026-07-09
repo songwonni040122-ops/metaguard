@@ -1,24 +1,15 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { validateAnswers, score } from './_lib/scoring.js';
-import { chatSystemPrompt, openingSystemPrompt, Pick } from './_lib/prompts.js';
+import { validateAnswers, score, rankBadPicks } from './_lib/scoring.js';
+import { chatSystemPrompt, openingSystemPrompt } from './_lib/prompts.js';
 import { chatStream, ChatMessage } from './_lib/openai.js';
 import { dbEnabled, insert } from './_lib/supabase.js';
 import { rateLimit, clientIp } from './_lib/ratelimit.js';
 
-const MAX_QUESTIONS = 5; // AI 자기점검 질문은 5개까지, 이후 프롬프트가 자연스럽게 마무리(강제 차단 아님)
+const MAX_QUESTIONS = 6; // 아쉬운 선택 2~3개 × 1~2턴 → 6개까지 질문, 이후 프롬프트가 자연스럽게 마무리
 const MAX_MESSAGE_LEN = 500;
 const MAX_HISTORY = 12;
 
 interface HistoryItem { role?: string; text?: string }
-
-// 클라이언트가 보낸 진단 선택 요약을 신뢰하지 않고 정규화(길이·개수 제한).
-function parsePicks(input: unknown): Pick[] {
-  if (!Array.isArray(input)) return [];
-  return input.slice(0, 12).map((p: any) => ({
-    topic: typeof p?.topic === 'string' ? p.topic.slice(0, 80) : '',
-    chose: typeof p?.chose === 'string' ? p.chose.slice(0, 120) : '',
-  })).filter((p) => p.chose);
-}
 
 // POST /api/chat — QA 챗봇 스트리밍(SSE). 프론트는 실패 시 규칙기반 폴백.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -57,15 +48,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // 프롬프트 인젝션 방지: 사용자 입력은 항상 user 역할로만. 시스템 규칙 우선.
   const turnNum = Number.isFinite(body.turn) ? Math.max(1, Number(body.turn)) : 1;
+  // 사용자가 점수를 낮춘 '아쉬운 선택' 상위 3개 → 이걸 콕 집어 이유를 묻는다.
+  const badPicks = rankBadPicks(body.picks);
   let messages: ChatMessage[];
   if (opening) {
-    // 첫 질문: 진단 선택(picks)만으로 개인화된 오프닝 질문 생성. 히스토리/유저 메시지 없음.
+    // 첫 질문: 가장 아쉬운 선택을 콕 집어 이유를 묻는 오프닝. 히스토리/유저 메시지 없음.
     messages = [
-      { role: 'system', content: openingSystemPrompt(weakAxes, parsePicks(body.picks)) },
+      { role: 'system', content: openingSystemPrompt(weakAxes, badPicks) },
       { role: 'user', content: '진단이 끝났어요. 제 선택을 보고 첫 질문을 해주세요.' },
     ];
   } else {
-    messages = [{ role: 'system', content: chatSystemPrompt(weakAxes, MAX_QUESTIONS, turnNum) }];
+    messages = [{ role: 'system', content: chatSystemPrompt(weakAxes, badPicks, MAX_QUESTIONS, turnNum) }];
     const history = Array.isArray(body.history) ? body.history.slice(-MAX_HISTORY) : [];
     for (const h of history) {
       const text = typeof h?.text === 'string' ? h.text.slice(0, MAX_MESSAGE_LEN) : '';
