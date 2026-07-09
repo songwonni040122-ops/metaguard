@@ -1,22 +1,16 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { validateAnswers, score, rankBadPicks } from './_lib/scoring.js';
+import { score, rankBadPicks } from './_lib/scoring.js';
 import { chatSystemPrompt, openingSystemPrompt } from './_lib/prompts.js';
 import { chatStream, ChatMessage } from './_lib/openai.js';
 import { dbEnabled, insert } from './_lib/supabase.js';
-import { rateLimit, clientIp } from './_lib/ratelimit.js';
-
-const MAX_QUESTIONS = 5; // 오프닝 1개 + 후속 질문 = 총 5개까지, 5번째에서 프롬프트가 자연스럽게 마무리(강제 차단 아님)
-const MAX_MESSAGE_LEN = 500;
-const MAX_HISTORY = 12;
+import { methodGuard, enforceRateLimit, fail, readAnswers, clientIp } from './_lib/http.js';
+import { LIMITS, RATE } from './_lib/limits.js';
 
 interface HistoryItem { role?: string; text?: string }
 
 // POST /api/chat — QA 챗봇 스트리밍(SSE). 프론트는 실패 시 규칙기반 폴백.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    return res.status(405).json({ error: 'method_not_allowed' });
-  }
+  if (!methodGuard(req, res, 'POST')) return;
 
   const body = (req.body || {}) as {
     sessionId?: string; answers?: unknown; turn?: number;
@@ -27,24 +21,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const sessionId = typeof body.sessionId === 'string' ? body.sessionId : null;
   const ip = clientIp(req);
   // 챗봇 분당 10회 (세션 우선, 없으면 IP).
-  if (!rateLimit(`chat:${sessionId || ip}`, 10, 60_000)) {
-    return res.status(429).json({ error: 'rate_limited' });
-  }
+  if (!enforceRateLimit(res, `chat:${sessionId || ip}`, RATE.chat.limit, RATE.chat.windowMs)) return;
 
   // opening=true: 사용자 메시지 없이, 진단 선택만으로 '첫 질문'을 AI가 생성한다.
   const opening = body.opening === true;
   const message = typeof body.message === 'string' ? body.message.trim() : '';
   if (!opening) {
-    if (!message) return res.status(400).json({ error: 'empty_message' });
-    if (message.length > MAX_MESSAGE_LEN) return res.status(400).json({ error: 'message_too_long' });
+    if (!message) return fail(res, 400, 'empty_message');
+    if (message.length > LIMITS.chatMessageMax) return fail(res, 400, 'message_too_long');
   }
 
-  let weakAxes;
-  try {
-    weakAxes = score(validateAnswers(body.answers)).weakAxes;
-  } catch (e) {
-    return res.status(400).json({ error: 'invalid_answers', detail: (e as Error).message });
-  }
+  const answers = readAnswers(res, body.answers);
+  if (!answers) return;
+  const weakAxes = score(answers).weakAxes;
 
   // 프롬프트 인젝션 방지: 사용자 입력은 항상 user 역할로만. 시스템 규칙 우선.
   const turnNum = Number.isFinite(body.turn) ? Math.max(1, Number(body.turn)) : 1;
@@ -58,10 +47,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       { role: 'user', content: '진단이 끝났어요. 제 선택을 보고 첫 질문을 해주세요.' },
     ];
   } else {
-    messages = [{ role: 'system', content: chatSystemPrompt(weakAxes, badPicks, MAX_QUESTIONS, turnNum) }];
-    const history = Array.isArray(body.history) ? body.history.slice(-MAX_HISTORY) : [];
+    messages = [{ role: 'system', content: chatSystemPrompt(weakAxes, badPicks, LIMITS.maxQuestions, turnNum) }];
+    const history = Array.isArray(body.history) ? body.history.slice(-LIMITS.chatHistoryMax) : [];
     for (const h of history) {
-      const text = typeof h?.text === 'string' ? h.text.slice(0, MAX_MESSAGE_LEN) : '';
+      const text = typeof h?.text === 'string' ? h.text.slice(0, LIMITS.chatMessageMax) : '';
       if (!text) continue;
       messages.push({ role: h.role === 'ai' || h.role === 'assistant' ? 'assistant' : 'user', content: text });
     }

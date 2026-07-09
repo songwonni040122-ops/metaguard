@@ -1,12 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { validateAnswers, score, typeInfo, rankBadPicks, applyAdjustments, Adjustments } from './_lib/scoring.js';
+import { score, typeInfo, rankBadPicks, applyAdjustments, Adjustments } from './_lib/scoring.js';
 import { reportSystemPrompt, reportSchema, adjustSystemPrompt, adjustSchema } from './_lib/prompts.js';
 import { chatJSON, MODEL, ChatMessage } from './_lib/openai.js';
 import { dbEnabled, insertReturning, insert } from './_lib/supabase.js';
-import { rateLimit, clientIp } from './_lib/ratelimit.js';
+import { methodGuard, enforceRateLimit, readAnswers, clientIp } from './_lib/http.js';
+import { LIMITS, RATE } from './_lib/limits.js';
 
-const ADJ_CAP = 20;       // 축별 상담 보정 상한(±)
-const MAX_TRANSCRIPT = 20; // 보정에 넣는 대화 최대 턴 수
+const ADJ_CAP = LIMITS.adjustCap; // 축별 상담 보정 상한(±)
 
 interface TItem { role: string; text: string }
 
@@ -14,7 +14,7 @@ interface TItem { role: string; text: string }
 function parseTranscript(input: unknown): TItem[] {
   if (!Array.isArray(input)) return [];
   return input
-    .slice(-MAX_TRANSCRIPT)
+    .slice(-LIMITS.transcriptMax)
     .map((m: any): TItem | null => {
       const role = m?.role === 'me' || m?.role === 'user' ? 'user' : 'assistant';
       const raw = typeof m?.text === 'string' ? m.text : typeof m?.content === 'string' ? m.content : '';
@@ -27,26 +27,17 @@ function parseTranscript(input: unknown): TItem[] {
 // POST /api/report — 리포트 해설(JSON).
 // 점수/유형: 시나리오 선택으로 서버 재계산(척추) → AI 상담 답변으로 축별 보정 → 최종 유형·점수 확정. narrative 만 AI 문장.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    return res.status(405).json({ error: 'method_not_allowed' });
-  }
+  if (!methodGuard(req, res, 'POST')) return;
 
   const body = (req.body || {}) as { sessionId?: string; answers?: unknown; phase?: string; transcript?: unknown; picks?: unknown };
   const sessionId = typeof body.sessionId === 'string' ? body.sessionId : null;
   const phase = body.phase === 'rediag' ? 'rediag' : 'diag';
   const ip = clientIp(req);
   // 리포트 세션당 분당 5회 상한.
-  if (!rateLimit(`report:${sessionId || ip}`, 5, 60_000)) {
-    return res.status(429).json({ error: 'rate_limited' });
-  }
+  if (!enforceRateLimit(res, `report:${sessionId || ip}`, RATE.report.limit, RATE.report.windowMs)) return;
 
-  let answers;
-  try {
-    answers = validateAnswers(body.answers);
-  } catch (e) {
-    return res.status(400).json({ error: 'invalid_answers', detail: (e as Error).message });
-  }
+  const answers = readAnswers(res, body.answers);
+  if (!answers) return;
 
   // 1차 진단(척추): 서버 재계산 (클라 값 무시)
   const base = score(answers);
