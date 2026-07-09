@@ -1,10 +1,11 @@
 // MetaGuard service worker — 앱 셸/에셋 오프라인 캐시.
 // HTML(문서)은 network-first 로 항상 최신을 받고, 실패 시에만 캐시로 폴백한다.
 // 지문(uuid) 붙은 정적 자산(woff2/jpg/js)만 cache-first. AI(/api/*)는 절대 캐시하지 않는다.
-const VERSION = 'mg-v10';
+const VERSION = 'mg-v11';
 const CORE = [
   './',
   './index.html',
+  './assets/mg-data.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png'
