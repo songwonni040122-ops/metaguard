@@ -1,6 +1,41 @@
 <!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
+<script>
+/* 카카오톡 인앱 브라우저 탈출: 화면이 깨지므로 외부(기본) 브라우저로 유도.
+   - 카톡 공식 스킴 kakaotalk://web/openExternal (안드로이드·iOS 공통)으로 자동 전환 시도.
+   - 스킴이 막힌 예외 상황엔 수동 안내 오버레이('다른 브라우저로 열기') 폴백. */
+(function(){
+  try{
+    var ua = (navigator.userAgent || '').toLowerCase();
+    if (ua.indexOf('kakaotalk') === -1) return;          // 카카오톡 인앱브라우저에서만 동작
+    var isIOS = /iphone|ipad|ipod/.test(ua);
+    var openExternal = function(){
+      location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(location.href);
+    };
+    openExternal();                                      // 1) 외부 브라우저로 자동 전환
+
+    // 2) 폴백 안내(스킴이 동작하지 않을 때만 눈에 보임 — 성공 시 이미 외부 브라우저로 이탈)
+    var showGuide = function(){
+      if (!document.body || document.getElementById('mg-kakao-guide')) return;
+      var box = document.createElement('div');
+      box.id = 'mg-kakao-guide';
+      box.setAttribute('style', 'position:fixed;inset:0;z-index:2147483647;background:#0b1a40;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,\'Apple SD Gothic Neo\',\'Malgun Gothic\',sans-serif');
+      var hint = isIOS
+        ? '오른쪽 아래 <b>Safari로 열기</b> 아이콘'
+        : '오른쪽 위 더보기(<b>&#8942;</b>) → <b>다른 브라우저로 열기</b>';
+      box.innerHTML =
+        '<div style="font-size:19px;font-weight:800;margin-bottom:12px">기본 브라우저로 열어 주세요</div>' +
+        '<div style="font-size:14px;line-height:1.75;color:rgba(255,255,255,.85);max-width:320px">카카오톡 안에서는 화면이 정상적으로 보이지 않을 수 있어요.<br>' + hint + ' 를 눌러 주세요.</div>' +
+        '<button id="mg-kakao-retry" style="margin-top:24px;background:#173072;color:#fff;border:none;border-radius:12px;padding:13px 24px;font-size:15px;font-weight:700">외부 브라우저로 열기 다시 시도</button>';
+      document.body.appendChild(box);
+      document.getElementById('mg-kakao-retry').onclick = openExternal;
+    };
+    var arm = function(){ setTimeout(showGuide, 1200); };
+    if (document.body) arm(); else document.addEventListener('DOMContentLoaded', arm);
+  }catch(e){}
+})();
+</script>
 <script>window.__resources = {"scenImg1": "assets/c4213b1e-247f-45e4-91ea-38aaa60724b4.jpg", "scenImg4": "assets/3f1d3950-e52b-4182-a529-3b83fe4c029b.jpg", "scenImg7": "assets/2aada4f2-d98b-49fa-87cd-3e0f1c50d636.jpg", "scenImg8": "assets/f848d9d4-d3e9-4ef8-8a33-034d1a1ad424.jpg", "scenImg0": "assets/e7bbecd2-3f9e-46fe-b1cf-3c57a8141615.jpg", "scenImg5": "assets/0925b4ea-c3d2-4eeb-ae36-0ee5e3e32e84.jpg", "scenImg6": "assets/930d76da-c6ca-406f-af47-92a4ac7b8e13.jpg", "scenImg2": "assets/81e88089-4a18-4c03-9a8b-f1feb9ae686d.jpg", "scenImg3": "assets/2a22b020-f78b-44a5-bd88-2c4529ccefd8.jpg"};</script>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0b1a40">
