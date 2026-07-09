@@ -100,7 +100,7 @@ export function pickWeakAxes(choice: Choice): AxisKey[] {
 // 진단에서 사용자가 고른 '아쉬운 선택'을 약점 기여가 큰 순으로 상위 N개.
 // 클라이언트 입력(untrusted)을 길이·개수 제한하며 정규화한다.
 export interface BadPick { topic: string; chose: string; hurt: AxisKey[]; }
-export function rankBadPicks(input: unknown, limit = 3): BadPick[] {
+export function rankBadPicks(input: unknown, limit = 5): BadPick[] {
   if (!Array.isArray(input)) return [];
   return input
     .slice(0, 12)
