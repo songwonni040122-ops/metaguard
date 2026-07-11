@@ -333,7 +333,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
           </div>
           <div style="padding:10px 14px 14px;border-top:1px solid #f0f3f9;flex-shrink:0;background:#fff;display:flex;flex-direction:column;gap:10px">
             <div style="display:flex;align-items:center;gap:9px">
-              <input value="{{ qaInput }}" onchange="{{ qaSetInput }}" placeholder="편하게 답변을 적어 주세요…" style="flex:1;background:#eef1f7;border:none;border-radius:99px;padding:11px 16px;font-size:16px;color:#14223f;outline:none">
+              <input value="{{ qaInput }}" onchange="{{ qaSetInput }}" placeholder="편하게 답변을 적어 주세요…" style="flex:1;min-width:0;background:#eef1f7;border:none;border-radius:99px;padding:11px 16px;font-size:16px;color:#14223f;outline:none">
               <button onclick="{{ qaSend }}" style="width:42px;height:42px;border-radius:50%;background:#173072;border:none;display:grid;place-items:center;cursor:pointer;flex-shrink:0"><svg width="17" height="17" viewBox="0 0 24 24" fill="#fff"><path d="M3 11 21 3l-8 18-2.6-7.4z"></path></svg></button>
             </div>
             <button onclick="{{ qaFinish }}" style="{{ ctaStyle }}">분석 결과 보기 →</button>
@@ -599,7 +599,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
             <div style="display:flex;align-items:center;gap:10px;margin:20px 0"><div style="flex:1;height:1px;background:#e6ebf5"></div><span style="font-size:12px;color:#8a96ad;font-weight:700">또는 코드로 참여</span><div style="flex:1;height:1px;background:#e6ebf5"></div></div>
 
             <div style="display:flex;gap:8px">
-              <input value="{{ squadJoinCode }}" onchange="{{ onSquadCode }}" placeholder="참여코드 (예: K7X2QP)" style="flex:1;border:1px solid #e6ebf5;border-radius:12px;padding:12px 14px;font-size:16px;color:#14223f;outline:none;letter-spacing:2px;text-transform:uppercase">
+              <input value="{{ squadJoinCode }}" onchange="{{ onSquadCode }}" placeholder="참여코드 (예: K7X2QP)" style="flex:1;min-width:0;border:1px solid #e6ebf5;border-radius:12px;padding:12px 14px;font-size:16px;color:#14223f;outline:none;letter-spacing:2px;text-transform:uppercase">
               <button onclick="{{ onSquadJoin }}" style="background:#173072;color:#fff;font-weight:700;border:none;border-radius:12px;padding:0 20px;cursor:pointer;font-size:14px">참여</button>
             </div>
             <sc-if value="{{ sqErrOn }}" hint-placeholder-val="{{ false }}"><div style="margin-top:12px;font-size:13px;color:#c0392b;background:#fdecea;border-radius:10px;padding:10px 13px;line-height:1.5">{{ squadErr }}</div></sc-if>
